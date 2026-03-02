@@ -295,7 +295,9 @@
         .editor-container.hidden,
         .preview-container.hidden,
         .code-tab-content.hidden,
-        .preview-tab-content.hidden {
+        .preview-tab-content.hidden,
+        #codeTabContent.hidden,
+        #previewTabContent.hidden {
             display: none !important;
         }
 
@@ -586,9 +588,12 @@
                 if (req.status === 'finished') {
                     isGenerating = false;
                     updateUIForGenerationComplete();
+                    document.getElementById('agentStatus').textContent = '生成完成';
                 } else if (req.status === 'failed') {
                     showError('生成失败');
-                } else if (req.status === 'processing') {
+                    isGenerating = false;
+                    updateUIForGenerationComplete();
+                } else if (req.status === 'processing' || req.status === 'pending') {
                     // 正在处理中，保持禁用状态
                     isGenerating = true;
                     document.getElementById('sendBtn').disabled = true;
@@ -774,6 +779,8 @@
         function updateUIForGenerationComplete() {
             document.getElementById('copyBtn').disabled = false;
             document.getElementById('downloadBtn').disabled = false;
+            // 启用发送按钮
+            document.getElementById('sendBtn').disabled = false;
         }
 
         // ==================== 预览功能 ====================
