@@ -358,12 +358,19 @@ def chat_with_requirement(req_id):
             return jsonify({'error': '需求不存在'}), 404
 
         user_message = data.get('message', '').strip()
-        llm_instance_id = f"requirement_{req_id}"
-        llm = get_llm(llm_instance_id)
 
         # 从数据库加载对话历史
         dialogue_history = requirement.dialogue_history or []
-        llm.load_memory_from_db(dialogue_history)
+
+        # 构建对话上下文：提取最近的 N 条对话
+        recent_dialogues = dialogue_history[-6:] if len(dialogue_history) > 6 else dialogue_history
+        context_parts = []
+        for msg in recent_dialogues:
+            if msg.get('role') == 'user':
+                context_parts.append(f"用户：{msg.get('content', '')}")
+            elif msg.get('role') == 'agent':
+                context_parts.append(f"AI: {msg.get('content', '')}")
+        context = '\n'.join(context_parts)
 
         # 保存用户消息到对话历史
         dialogue_history.append({
@@ -373,19 +380,21 @@ def chat_with_requirement(req_id):
             'timestamp': get_current_timestamp()
         })
 
-        # 使用 LLM 生成回复（流式）
+        # 使用 LLM 生成回复
         system_prompt = """你是一个专业的 AI 编程助手，帮助用户完善代码、解答疑问。
 保持简洁专业的回答，如果涉及代码修改，请提供完整的代码片段。"""
 
-        # 构建对话上下文
         user_prompt = f"""用户需求：{requirement.content}
 
-用户问题：{user_message}
+历史对话：
+{context if context else '暂无历史对话'}
+
+当前问题：{user_message}
 
 请帮助解答用户的问题。"""
 
         # 调用 LLM 获取回复
-        ai_response = llm.chat(user_prompt, system_prompt, use_memory=True)
+        ai_response = chat_with_llm(user_prompt, system_prompt)
 
         # 保存 AI 回复到对话历史
         dialogue_history.append({
@@ -529,9 +538,9 @@ def process_requirement_with_agents(requirement_id: int):
         # 4. 工程师智能体 - 传入前面所有智能体的输出作为上下文
         print("[信息] 工程师智能体开始工作...")
         sys.stdout.flush()
-        # 构建清晰的上下文格式
-        context = "\n\n---\n\n".join([f"【{a['name']}输出】\n{a['output']}" for a in agent_outputs])
-        code_output = run_engineer(requirement.content, context)
+        # 压缩上下文：只提取每个智能体的核心内容，减少 token 消耗
+        compressed_context = compress_agent_outputs(agent_outputs)
+        code_output = run_engineer(requirement.content, compressed_context)
 
         # 解析并保存代码文件
         try:
@@ -608,6 +617,39 @@ def send_sse_progress(client_id, agent_name, progress):
                 pass
 
 
+def compress_agent_outputs(agent_outputs):
+    """
+    压缩智能体输出，提取关键信息，减少 token 消耗
+    只保留功能清单、技术选型、数据结构等核心内容
+    """
+    compressed = []
+    for output in agent_outputs:
+        name = output['name']
+        content = output['output']
+
+        # 提取关键信息：功能清单、技术栈、数据结构
+        keywords = ['功能清单', '核心功能', '技术栈', '数据结构', '组件设计', '页面结构', '交互逻辑']
+        extracted_lines = []
+
+        for line in content.split('\n'):
+            line = line.strip()
+            if line and any(kw in line for kw in keywords):
+                extracted_lines.append(line)
+            # 也保留以 - 或 数字 开头的列表项
+            elif line.startswith('-') or line[0:1].isdigit():
+                extracted_lines.append(line)
+
+        # 如果提取后内容太少，使用原文的前 500 字符
+        if len('\n'.join(extracted_lines)) < 200:
+            extracted = content[:500] + '...' if len(content) > 500 else content
+        else:
+            extracted = '\n'.join(extracted_lines[:30])  # 最多保留 30 行
+
+        compressed.append(f"{name}: {extracted}")
+
+    return '\n\n'.join(compressed)
+
+
 def generate_fallback_code(requirement: str) -> list:
     """
     生成备用代码（当 LLM 失败时使用）
@@ -620,6 +662,8 @@ def generate_fallback_code(requirement: str) -> list:
         return generate_calculator_app_code()
     elif '笔记' in requirement or '备忘录' in requirement:
         return generate_note_app_code()
+    elif '日历' in requirement or '日程' in requirement or 'calendar' in requirement_lower:
+        return generate_calendar_app_code()
     else:
         return generate_generic_app_code(requirement)
 
@@ -672,54 +716,97 @@ def run_engineer(requirement: str, context: str = None) -> str:
     工程师智能体：生成代码
     接收前面智能体的输出作为上下文参考
     """
+    # 使用压缩后的 context，如果为空则使用默认提示
+    context_text = context if context else "请根据需求生成代码。"
+
+    # 第一次尝试：使用标准 prompt
     user_prompt = ENGINEER_USER_PROMPT.format(
         requirement=requirement,
-        context=context if context else "请根据需求生成代码。"
+        context=context_text
     )
 
-    try:
-        # 工程师需要生成代码，使用更大的 max_tokens
-        response = chat_with_llm(user_prompt, ENGINEER_SYSTEM_PROMPT, max_tokens=8000)
-        print(f"[调试] LLM 响应长度：{len(response)}")
+    response = _try_generate_code(user_prompt, max_retries=2)
+
+    # 如果失败，使用简化 prompt 重试（不带 context）
+    if not response or response.startswith('[错误]'):
+        print(f"[警告] 第一次尝试失败，使用简化 prompt 重试...")
         sys.stdout.flush()
+        simple_prompt = f"""请为以下需求生成完整的 Web 应用代码：
 
-        # 检查是否是错误响应
-        if response.startswith('[错误]') or response.startswith('API 请求失败'):
-            print(f"[警告] LLM 返回错误，使用 Fallback 代码")
-            sys.stdout.flush()
-            return json.dumps(generate_fallback_code(requirement), ensure_ascii=False)
+用户需求：{requirement}
 
-        # 清理可能的 markdown 标记
-        response = response.strip()
-        if response.startswith('```json'):
-            response = response[7:]
-        if response.endswith('```'):
-            response = response[:-3]
-        response = response.strip()
+要求：
+1. 生成 index.html、style.css、script.js 三个文件
+2. 代码完整可运行，实现核心功能
+3. 使用原生 HTML/CSS/JavaScript
+4. 数据使用 LocalStorage 持久化
 
-        # 验证 JSON 格式
-        files = json.loads(response)
-        if isinstance(files, list):
-            print(f"[调试] JSON 解析成功，返回 {len(files)} 个文件")
-            sys.stdout.flush()
-            return json.dumps(files, ensure_ascii=False)
-        else:
-            print(f"[调试] JSON 解析失败：返回类型不是列表")
-            sys.stdout.flush()
+请以 JSON 数组格式返回：[{{"filename": "index.html", "content": "..."}}, ...]
+只返回 JSON，不要其他解释文字。"""
+        response = _try_generate_code(simple_prompt, max_retries=1)
 
-    except json.JSONDecodeError as e:
-        print(f"[错误] 工程师 JSON 解析失败：{e}")
-        # 打印响应内容的前 500 字符，帮助调试
-        print(f"[调试] 响应内容前 500 字符：{repr(response[:500]) if 'response' in locals() else 'N/A'}")
+    # 如果还是失败，使用 Fallback
+    if not response or response.startswith('[错误]'):
+        print(f"[调试] 使用 Fallback 代码模板")
         sys.stdout.flush()
-    except Exception as e:
-        print(f"工程师 LLM 调用失败：{e}")
-        sys.stdout.flush()
+        return json.dumps(generate_fallback_code(requirement), ensure_ascii=False)
 
-    # LLM 失败时使用预设模板
-    print(f"[调试] 使用 Fallback 代码模板")
-    sys.stdout.flush()
-    return json.dumps(generate_fallback_code(requirement), ensure_ascii=False)
+    return response
+
+
+def _try_generate_code(prompt: str, max_tokens: int = 8000, max_retries: int = 1) -> str:
+    """
+    尝试生成代码，支持重试
+    """
+    last_error = None
+
+    for attempt in range(max_retries + 1):
+        try:
+            if attempt > 0:
+                print(f"[调试] 第 {attempt + 1} 次尝试生成代码...")
+                sys.stdout.flush()
+
+            # 使用更大的 max_tokens 确保能生成完整代码
+            response = chat_with_llm(prompt, ENGINEER_SYSTEM_PROMPT, max_tokens=max_tokens)
+            print(f"[调试] LLM 响应长度：{len(response)}")
+            sys.stdout.flush()
+
+            # 检查是否是错误响应（降低阈值到 30 字符）
+            if response.startswith('[错误]') or response.startswith('API 请求失败') or len(response) < 30:
+                print(f"[警告] LLM 返回错误或内容过短（{len(response)} 字符）")
+                last_error = response
+                continue
+
+            # 清理 markdown 标记
+            response = response.strip()
+            if response.startswith('```json'):
+                response = response[7:]
+            if response.endswith('```'):
+                response = response[:-3]
+            response = response.strip()
+
+            # 验证 JSON 格式
+            files = json.loads(response)
+            if isinstance(files, list):
+                print(f"[调试] JSON 解析成功，返回 {len(files)} 个文件")
+                sys.stdout.flush()
+                return json.dumps(files, ensure_ascii=False)
+            else:
+                print(f"[调试] JSON 解析失败：返回类型不是列表")
+                sys.stdout.flush()
+
+        except json.JSONDecodeError as e:
+            print(f"[错误] JSON 解析失败：{e}")
+            print(f"[调试] 响应内容前 300 字符：{repr(response[:300]) if 'response' in locals() else 'N/A'}")
+            sys.stdout.flush()
+            last_error = str(e)
+        except Exception as e:
+            print(f"工程师 LLM 调用失败：{e}")
+            sys.stdout.flush()
+            last_error = str(e)
+
+    # 返回最后一次错误消息或空字符串
+    return f"[错误] {last_error}" if last_error else ""
 
 
 # 保留原有函数（向后兼容）
@@ -1540,6 +1627,277 @@ function formatDate(isoString) {
 }''',
             'status': 'completed',
             'total_lines': 118
+        }
+    ]
+
+
+def generate_calendar_app_code() -> list:
+    """生成日历应用代码"""
+    return [
+        {
+            'filename': 'index.html',
+            'content': '''<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>日历应用</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body class="bg-gray-100 min-h-screen">
+    <div class="container mx-auto px-4 py-8 max-w-5xl">
+        <h1 class="text-4xl font-bold text-center text-gray-800 mb-8">📅 日历</h1>
+
+        <!-- 日历主体 -->
+        <div class="bg-white rounded-lg shadow-lg overflow-hidden">
+            <!-- 月份导航 -->
+            <div class="flex items-center justify-between p-4 bg-gradient-to-r from-blue-500 to-purple-500">
+                <button id="prevMonth" class="px-4 py-2 bg-white/20 hover:bg-white/30 rounded-lg text-white transition-colors">
+                    &lt; 上月
+                </button>
+                <h2 id="currentMonth" class="text-2xl font-bold text-white"></h2>
+                <button id="nextMonth" class="px-4 py-2 bg-white/20 hover:bg-white/30 rounded-lg text-white transition-colors">
+                    下月 &gt;
+                </button>
+            </div>
+
+            <!-- 星期标题 -->
+            <div class="grid grid-cols-7 bg-gray-50 border-b">
+                <div class="p-3 text-center text-sm font-semibold text-gray-600">日</div>
+                <div class="p-3 text-center text-sm font-semibold text-gray-600">一</div>
+                <div class="p-3 text-center text-sm font-semibold text-gray-600">二</div>
+                <div class="p-3 text-center text-sm font-semibold text-gray-600">三</div>
+                <div class="p-3 text-center text-sm font-semibold text-gray-600">四</div>
+                <div class="p-3 text-center text-sm font-semibold text-gray-600">五</div>
+                <div class="p-3 text-center text-sm font-semibold text-gray-600">六</div>
+            </div>
+
+            <!-- 日历网格 -->
+            <div id="calendarGrid" class="grid grid-cols-7"></div>
+        </div>
+
+        <!-- 日程区域 -->
+        <div class="mt-8 bg-white rounded-lg shadow-lg p-6">
+            <h3 class="text-xl font-bold text-gray-800 mb-4">📝 日程安排</h3>
+            <div class="flex gap-2 mb-4">
+                <input type="text" id="eventInput" placeholder="输入日程内容..."
+                    class="flex-1 px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500">
+                <button id="addEvent" class="px-6 py-2 bg-blue-500 text-white rounded-lg hover:bg-blue-600 transition-colors">
+                    添加
+                </button>
+            </div>
+            <ul id="eventList" class="space-y-2"></ul>
+        </div>
+    </div>
+
+    <script src="script.js"></script>
+</body>
+</html>''',
+            'status': 'completed',
+            'total_lines': 65
+        },
+        {
+            'filename': 'style.css',
+            'content': '''/* 日历应用样式 */
+
+.calendar-day {
+    min-height: 100px;
+    padding: 8px;
+    border: 1px solid #e5e7eb;
+    transition: all 0.2s;
+}
+
+.calendar-day:hover {
+    background-color: #f3f4f6;
+}
+
+.calendar-day.other-month {
+    background-color: #f9fafb;
+    color: #9ca3af;
+}
+
+.calendar-day.today {
+    background-color: #dbeafe;
+    border-color: #3b82f6;
+}
+
+.calendar-day.selected {
+    background-color: #e0e7ff;
+    border-color: #6366f1;
+}
+
+.day-number {
+    font-weight: 600;
+    margin-bottom: 4px;
+}
+
+.event-item {
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    color: white;
+    padding: 4px 8px;
+    border-radius: 4px;
+    font-size: 12px;
+    margin-bottom: 4px;
+    cursor: pointer;
+    transition: transform 0.2s;
+}
+
+.event-item:hover {
+    transform: scale(1.02);
+}
+
+.event-item.delete-btn {
+    background: #ef4444;
+}''',
+            'status': 'completed',
+            'total_lines': 40
+        },
+        {
+            'filename': 'script.js',
+            'content': '''// 日历应用核心逻辑
+
+let currentDate = new Date();
+let selectedDate = null;
+let events = JSON.parse(localStorage.getItem('calendarEvents')) || {};
+
+// 初始化
+document.addEventListener('DOMContentLoaded', () => {
+    renderCalendar();
+    loadEvents();
+    setupEventListeners();
+});
+
+function setupEventListeners() {
+    document.getElementById('prevMonth').addEventListener('click', () => {
+        currentDate.setMonth(currentDate.getMonth() - 1);
+        renderCalendar();
+    });
+
+    document.getElementById('nextMonth').addEventListener('click', () => {
+        currentDate.setMonth(currentDate.getMonth() + 1);
+        renderCalendar();
+    });
+
+    document.getElementById('addEvent').addEventListener('click', addEvent);
+    document.getElementById('eventInput').addEventListener('keypress', (e) => {
+        if (e.key === 'Enter') addEvent();
+    });
+}
+
+function renderCalendar() {
+    const year = currentDate.getFullYear();
+    const month = currentDate.getMonth();
+
+    // 更新月份标题
+    document.getElementById('currentMonth').textContent = `${year}年${month + 1}月`;
+
+    // 获取当月第一天和最后一天
+    const firstDay = new Date(year, month, 1);
+    const lastDay = new Date(year, month + 1, 0);
+    const startDay = firstDay.getDay(); // 0-6 (周日 - 周六)
+    const totalDays = lastDay.getDate();
+
+    // 获取上个月最后一天
+    const prevLastDay = new Date(year, month, 0).getDate();
+
+    const grid = document.getElementById('calendarGrid');
+    grid.innerHTML = '';
+
+    // 渲染上个月的日期
+    for (let i = startDay - 1; i >= 0; i--) {
+        const day = prevLastDay - i;
+        grid.innerHTML += `<div class="calendar-day other-month"><span class="day-number">${day}</span></div>`;
+    }
+
+    // 渲染当月日期
+    const today = new Date();
+    for (let day = 1; day <= totalDays; day++) {
+        const dateStr = `${year}-${String(month + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+        const isToday = day === today.getDate() && month === today.getMonth() && year === today.getFullYear();
+        const isSelected = dateStr === selectedDate;
+
+        let classes = 'calendar-day';
+        if (isToday) classes += ' today';
+        if (isSelected) classes += ' selected';
+
+        const dayEvents = events[dateStr] || [];
+        const eventsHtml = dayEvents.map(e => `<div class="event-item">${escapeHtml(e)}</div>`).join('');
+
+        grid.innerHTML += `
+            <div class="${classes}" onclick="selectDate('${dateStr}')">
+                <div class="day-number">${day}</div>
+                ${eventsHtml}
+            </div>
+        `;
+    }
+
+    // 渲染下个月的日期
+    const totalCells = startDay + totalDays;
+    const nextDays = 7 - (totalCells % 7);
+    if (nextDays < 7) {
+        for (let day = 1; day <= nextDays; day++) {
+            grid.innerHTML += `<div class="calendar-day other-month"><span class="day-number">${day}</span></div>`;
+        }
+    }
+}
+
+function selectDate(dateStr) {
+    selectedDate = dateStr;
+    renderCalendar();
+    loadEvents();
+}
+
+function addEvent() {
+    const input = document.getElementById('eventInput');
+    const content = input.value.trim();
+    if (!content || !selectedDate) return;
+
+    if (!events[selectedDate]) {
+        events[selectedDate] = [];
+    }
+    events[selectedDate].push(content);
+    saveEvents();
+    input.value = '';
+    renderCalendar();
+}
+
+function loadEvents() {
+    const list = document.getElementById('eventList');
+    const dayEvents = events[selectedDate] || [];
+
+    if (dayEvents.length === 0) {
+        list.innerHTML = '<li class="text-gray-500 text-center py-4">暂无日程</li>';
+    } else {
+        list.innerHTML = dayEvents.map((event, index) => `
+            <li class="flex items-center justify-between p-3 bg-gray-50 rounded-lg">
+                <span>${escapeHtml(event)}</span>
+                <button onclick="deleteEvent(${index})" class="text-red-500 hover:text-red-600">删除</button>
+            </li>
+        `).join('');
+    }
+}
+
+function deleteEvent(index) {
+    if (selectedDate && events[selectedDate]) {
+        events[selectedDate].splice(index, 1);
+        saveEvents();
+        renderCalendar();
+        loadEvents();
+    }
+}
+
+function saveEvents() {
+    localStorage.setItem('calendarEvents', JSON.stringify(events));
+}
+
+function escapeHtml(text) {
+    const div = document.createElement('div');
+    div.textContent = text;
+    return div.innerHTML;
+}''',
+            'status': 'completed',
+            'total_lines': 130
         }
     ]
 

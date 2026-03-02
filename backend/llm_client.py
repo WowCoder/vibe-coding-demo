@@ -52,7 +52,7 @@ class BailianClient:
         try:
             if stream:
                 # 流式输出
-                response = requests.post(url, headers=headers, json=data, stream=True, timeout=120)
+                response = requests.post(url, headers=headers, json=data, stream=True, timeout=180)
                 response.raise_for_status()
 
                 for line in response.iter_lines():
@@ -72,14 +72,14 @@ class BailianClient:
                                 continue
             else:
                 # 非流式输出
-                response = requests.post(url, headers=headers, json=data, timeout=120)
+                response = requests.post(url, headers=headers, json=data, timeout=180)
                 response.raise_for_status()
                 result = response.json()
                 content = result.get('choices', [{}])[0].get('message', {}).get('content', '')
                 yield content
 
         except requests.exceptions.Timeout:
-            yield f"[错误] API 请求超时（120 秒）"
+            yield f"[错误] API 请求超时（180 秒）"
         except requests.exceptions.RequestException as e:
             error_msg = f"API 请求失败：{str(e)}"
             if hasattr(e, 'response') and e.response is not None:
