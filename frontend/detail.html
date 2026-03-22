@@ -481,6 +481,8 @@
         let codeFiles = {};
         let isGenerating = true;
         let dialogueMessages = [];
+        // ==================== 阶段 3.3: 修改文件标记 ====================
+        let modifiedFiles = new Set();  // 记录被修改的文件名
 
         // ==================== 初始化 ====================
         document.addEventListener('DOMContentLoaded', () => {
@@ -761,11 +763,15 @@
                 return;
             }
 
-            tabsContainer.innerHTML = filenames.map(filename => `
-                <button class="file-tab ${filename === currentFile ? 'active' : ''}" onclick="switchToFile('${filename}')">
-                    ${getFileIcon(filename)} ${filename}
-                </button>
-            `).join('');
+            tabsContainer.innerHTML = filenames.map(filename => {
+                const isModified = modifiedFiles.has(filename);
+                return `
+                    <button class="file-tab ${filename === currentFile ? 'active' : ''}" onclick="switchToFile('${filename}')">
+                        ${getFileIcon(filename)} ${filename}
+                        ${isModified ? '<span class="modified-indicator" style="display:inline-block;width:8px;height:8px;background:#ef4444;border-radius:50%;margin-left:6px;" title="已修改"></span>' : ''}
+                    </button>
+                `;
+            }).join('');
         }
 
         function switchToFile(filename) {
@@ -798,6 +804,19 @@
             if (filename.endsWith('.css')) return '🎨';
             if (filename.endsWith('.js')) return '📜';
             return '📁';
+        }
+
+        // ==================== 阶段 3.3: 标记文件为已修改 ====================
+        function markFileAsModified(filename) {
+            modifiedFiles.add(filename);
+        }
+
+        function clearFileModified(filename) {
+            modifiedFiles.delete(filename);
+        }
+
+        function clearAllFileModified() {
+            modifiedFiles.clear();
         }
 
         // ==================== 进度更新 ====================
@@ -1066,6 +1085,32 @@
             }
         }
 
+        // ==================== 阶段 3.2: Toast 提示 ====================
+        function showToast(message, type = 'info') {
+            const toast = document.createElement('div');
+            toast.className = `toast toast-${type}`;
+            toast.textContent = message;
+            toast.style.cssText = `
+                position: fixed;
+                top: 20px;
+                right: 20px;
+                padding: 12px 20px;
+                border-radius: 8px;
+                background: ${type === 'success' ? '#10b981' : type === 'error' ? '#ef4444' : '#3b82f6'};
+                color: white;
+                font-size: 14px;
+                z-index: 10000;
+                box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+                animation: slideIn 0.3s ease;
+            `;
+            document.body.appendChild(toast);
+            setTimeout(() => {
+                toast.style.opacity = '0';
+                toast.style.transition = 'opacity 0.3s';
+                setTimeout(() => toast.remove(), 300);
+            }, 3000);
+        }
+
         async function sendChatMessage() {
             const input = document.getElementById('chatInput');
             const sendBtn = document.getElementById('sendBtn');
@@ -1122,11 +1167,33 @@
                         newCodeFiles[file.filename] = file.content;
                     });
                     codeFiles = newCodeFiles;
-                    renderFileTabs();
-                    if (currentFile) {
-                        editor.setValue(codeFiles[currentFile] || '');
+
+                    // ==================== 阶段 3.1 + 3.2: 显示修改文件提示 ====================
+                    if (data.updated_files && data.updated_files.length > 0) {
+                        // 标记修改的文件
+                        data.updated_files.forEach(filename => {
+                            markFileAsModified(filename);
+                        });
+
+                        renderFileTabs();
+                        if (currentFile) {
+                            editor.setValue(codeFiles[currentFile] || '');
+                        }
+                        updatePreview();
+
+                        // 显示 Toast 提示
+                        showToast(`已更新 ${data.updated_files.length} 个文件：${data.updated_files.join(', ')}`, 'success');
+
+                        // 如果有失败的文件，也显示
+                        if (data.failed_files && data.failed_files.length > 0) {
+                            const failedNames = data.failed_files.map(f => f.filename).join(', ');
+                            setTimeout(() => {
+                                showToast(`以下文件修改失败：${failedNames}`, 'error');
+                            }, 3500);
+                        }
+                    } else if (data.warning) {
+                        showToast(data.warning, 'info');
                     }
-                    updatePreview();
                 }
 
                 // 滚动到底部

@@ -148,6 +148,13 @@ CODE_EDIT_USER_PROMPT = """用户需求：{requirement}
 
 用户修改请求：{user_message}
 
+---
+历史对话上下文：
+{dialogue_context}
+---
+
+当前是第 {modification_count} 次代码修改。
+
 请返回修改的 diff。如果没有需要修改的代码，只返回文字说明。"""
 
 

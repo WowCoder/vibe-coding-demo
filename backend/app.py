@@ -347,7 +347,7 @@ def chat_with_requirement(req_id):
     from models import Requirement, SessionLocal
     from llm.client import get_client
     from prompts import CODE_EDIT_SYSTEM_PROMPT, CODE_EDIT_USER_PROMPT
-    from diff_utils import parse_diff, apply_diff
+    from diff_utils import parse_diff, apply_diff, validate_diff
 
     current_user_id = get_jwt_identity()
     data = request.get_json()
@@ -367,20 +367,26 @@ def chat_with_requirement(req_id):
 
         user_message = data.get('message', '').strip()
         dialogue_history = requirement.dialogue_history or []
+        code_files = requirement.code_files or []
 
-        # 构建对话上下文
-        recent_dialogues = dialogue_history[-6:] if len(dialogue_history) > 6 else dialogue_history
+        # ==================== 阶段 2.1+2.3: 传递对话历史 + 版本感知 ====================
+        # 计算修改次数（用于版本感知）
+        modification_count = sum(1 for msg in dialogue_history if msg.get('type') == 'code_updated')
+
+        # 构建对话上下文（最近 10 轮对话）
+        recent_dialogues = dialogue_history[-10:] if len(dialogue_history) > 10 else dialogue_history
         context_parts = []
         for msg in recent_dialogues:
             if msg.get('role') == 'user':
                 context_parts.append(f"用户：{msg.get('content', '')}")
-            elif msg.get('role') == 'agent':
+            elif msg.get('role') in ('agent', 'assistant'):
                 context_parts.append(f"AI: {msg.get('content', '')}")
-        context = '\n'.join(context_parts)
+            elif msg.get('type') == 'code_updated':
+                context_parts.append(f"系统：{msg.get('content', '')}")
+        dialogue_context = '\n'.join(context_parts)
 
-        # 获取当前代码
+        # ==================== 获取当前代码 ====================
         current_code = ""
-        code_files = requirement.code_files or []
         for file in code_files:
             current_code += f"\n\n// === {file.get('filename', 'unknown')} ===\n{file.get('content', '')}"
 
@@ -392,20 +398,50 @@ def chat_with_requirement(req_id):
             'timestamp': get_current_timestamp()
         })
 
-        # 调用 LLM 生成 diff
+        # ==================== 阶段 2.2: 优化 prompt ====================
         user_prompt = CODE_EDIT_USER_PROMPT.format(
             requirement=requirement.content,
             current_code=current_code if current_code else '暂无代码',
-            user_message=user_message
+            user_message=user_message,
+            dialogue_context=dialogue_context if dialogue_context else '无历史对话',
+            modification_count=modification_count
         )
 
         client = get_client()
-        response = client.chat(user_prompt, CODE_EDIT_SYSTEM_PROMPT, use_memory=False, max_tokens=3000, timeout=45)
+        response = client.chat(user_prompt, CODE_EDIT_SYSTEM_PROMPT, use_memory=False, max_tokens=3500, timeout=60)
         ai_response = response.content
 
-        # 解析并应用 diff
+        if response.is_error:
+            raise Exception(response.error or "LLM 响应错误")
+
+        # ==================== 阶段 1.3: Diff 格式校验 ====================
+        is_valid, diff_error = validate_diff(ai_response)
+        if not is_valid:
+            # LLM 没有返回有效的 diff，可能是纯文本回复
+            logger.info(f"LLM 返回的内容不是有效的 diff: {diff_error}")
+            # 直接返回 AI 回复，不修改代码
+            dialogue_history.append({
+                'role': 'agent',
+                'name': 'AI 助手',
+                'content': ai_response,
+                'timestamp': get_current_timestamp()
+            })
+            requirement.dialogue_history = dialogue_history
+            db.commit()
+
+            return jsonify({
+                'message': 'success',
+                'dialogue_history': dialogue_history,
+                'code_files': code_files,
+                'ai_response': ai_response,
+                'updated_files': [],
+                'warning': 'AI 返回的是文本回复而非代码修改'
+            }), 200
+
+        # ==================== 阶段 1.2 + 1.4: Diff 应用 + 失败回滚 + 日志 ====================
         code_updated = False
         updated_files = []
+        failed_files = []
 
         for diff_file in parse_diff(ai_response):
             original_file = None
@@ -416,17 +452,30 @@ def chat_with_requirement(req_id):
 
             if original_file:
                 try:
-                    new_content = apply_diff(original_file.get('content', ''), diff_file)
-                    if new_content != original_file.get('content', ''):
+                    # apply_diff 现在返回 (new_content, success, error_message)
+                    new_content, success, error_msg = apply_diff(original_file.get('content', ''), diff_file)
+
+                    if success and new_content != original_file.get('content', ''):
                         original_file['content'] = new_content
                         original_file['status'] = 'modified'
                         code_updated = True
                         updated_files.append(diff_file.filename)
-                        logger.info(f"文件 {diff_file.filename} 已通过 diff 更新")
-                except Exception as e:
-                    logger.warning(f"应用 diff 失败：{e}")
+                        logger.info(f"[Chat] 文件 {diff_file.filename} 已通过 diff 更新")
+                    else:
+                        # Diff 应用失败
+                        error_detail = f"文件 {diff_file.filename}: {error_msg}"
+                        logger.warning(f"[Chat] Diff 应用失败：{error_detail}")
+                        failed_files.append({'filename': diff_file.filename, 'error': error_msg})
 
-        # 保存 AI 回复
+                except Exception as e:
+                    error_detail = f"文件 {diff_file.filename}: {str(e)}"
+                    logger.error(f"[Chat] Diff 应用异常：{error_detail}", exc_info=True)
+                    failed_files.append({'filename': diff_file.filename, 'error': str(e)})
+            else:
+                logger.warning(f"[Chat] Diff 引用的文件不存在：{diff_file.filename}")
+
+        # ==================== 构建返回消息 ====================
+        # 保存 AI 回复和修改结果
         if code_updated:
             dialogue_history.append({
                 'role': 'system',
@@ -435,6 +484,17 @@ def chat_with_requirement(req_id):
                 'timestamp': get_current_timestamp(),
                 'type': 'code_updated'
             })
+
+            # 如果有失败的文件，也记录下来
+            if failed_files:
+                failed_names = [f['filename'] for f in failed_files]
+                dialogue_history.append({
+                    'role': 'system',
+                    'name': '系统',
+                    'content': f'以下文件修改失败：{", ".join(failed_names)}',
+                    'timestamp': get_current_timestamp(),
+                    'type': 'code_update_failed'
+                })
         else:
             dialogue_history.append({
                 'role': 'agent',
@@ -447,13 +507,19 @@ def chat_with_requirement(req_id):
         requirement.code_files = code_files
         db.commit()
 
-        return jsonify({
+        # ==================== 阶段 3.1: API 返回修改文件列表 ====================
+        result = {
             'message': 'success',
             'dialogue_history': dialogue_history,
             'code_files': requirement.code_files,
             'ai_response': ai_response,
-            'updated_files': updated_files if code_updated else []
-        }), 200
+            'updated_files': updated_files
+        }
+
+        if failed_files:
+            result['failed_files'] = failed_files
+
+        return jsonify(result), 200
 
     except Exception as e:
         logger.error(f"处理对话失败：{e}", exc_info=True)
