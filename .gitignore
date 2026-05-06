@@ -8,6 +8,9 @@
 *.sqlite
 *.sqlite3
 
+# Node
+node_modules/
+
 # Python
 __pycache__/
 *.py[cod]
