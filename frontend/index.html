@@ -1,412 +1,248 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="zh-CN">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Talk2Code 智能生成</title>
-    <script src="https://cdn.tailwindcss.com"></script>
-    <!-- DOMPurify XSS 防护 -->
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/dompurify/3.0.6/purify.min.js"></script>
-    <!-- 安全工具 -->
-    <script src="js/security.js"></script>
-    <style>
-        body {
-            background: linear-gradient(135deg, #f5f7fa 0%, #c3cfe2 100%);
-        }
-        .input-focus:focus {
-            box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.3);
-        }
-        .btn-gradient {
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-        }
-        .btn-gradient:hover {
-            background: linear-gradient(135deg, #5a6fd6 0%, #6a4190 100%);
-        }
-    </style>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Talk2Code — 用自然语言创造应用</title>
+<script src="js/security.js"></script>
+<style>
+  :root {
+    --bg:      oklch(97% 0.018 70);
+    --surface: oklch(99% 0.008 70);
+    --fg:      oklch(22% 0.02 50);
+    --muted:   oklch(50% 0.018 50);
+    --border:  oklch(90% 0.014 70);
+    --accent:  oklch(64% 0.13 28);
+    --accent-soft: oklch(88% 0.04 38);
+    --font-display: 'Tiempos Headline', 'Newsreader', 'Iowan Old Style', Georgia, serif;
+    --font-body: 'Söhne', -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
+  }
+  *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: var(--font-body); background: var(--bg); color: var(--fg);
+    min-height: 100vh; -webkit-font-smoothing: antialiased;
+    display: flex; flex-direction: column;
+  }
+  .nav {
+    background: var(--surface); border-bottom: 1px solid var(--border);
+    padding: 0 32px; height: 60px; display: flex; align-items: center;
+    justify-content: space-between; position: sticky; top: 0; z-index: 100;
+    backdrop-filter: blur(12px); background: oklch(99% 0.008 70 / 85%);
+  }
+  .nav-brand {
+    font-family: var(--font-display); font-size: 22px; font-weight: 600;
+    color: var(--fg); text-decoration: none; letter-spacing: -0.01em;
+  }
+  .nav-brand span { color: var(--accent); }
+  .nav-links { display: flex; align-items: center; gap: 8px; }
+  .nav-link {
+    padding: 8px 16px; border-radius: 10px; font-size: 14px; font-weight: 500;
+    color: var(--muted); text-decoration: none; transition: color 0.15s, background 0.15s;
+  }
+  .nav-link:hover { color: var(--fg); background: var(--bg); }
+  .nav-user { display: flex; align-items: center; gap: 12px; }
+  .nav-avatar {
+    width: 32px; height: 32px; border-radius: 50%;
+    background: var(--accent-soft); color: var(--accent);
+    display: flex; align-items: center; justify-content: center;
+    font-size: 13px; font-weight: 600;
+  }
+  .nav-username { font-size: 14px; color: var(--fg); font-weight: 500; }
+  .btn-logout {
+    padding: 8px 16px; border-radius: 10px; font-size: 14px; font-weight: 500;
+    color: var(--muted); cursor: pointer; border: none; background: none;
+    font-family: var(--font-body); transition: color 0.15s;
+  }
+  .btn-logout:hover { color: oklch(42% 0.15 20); }
+
+  .main {
+    flex: 1; display: flex; flex-direction: column; align-items: center;
+    justify-content: center; padding: 60px 24px; max-width: 720px;
+    margin: 0 auto; width: 100%;
+  }
+  .hero { text-align: center; margin-bottom: 48px; }
+  .hero h1 {
+    font-family: var(--font-display); font-size: clamp(36px, 5vw, 52px);
+    font-weight: 600; color: var(--fg); letter-spacing: -0.02em; line-height: 1.15;
+  }
+  .hero h1 mark { background: none; color: var(--accent); }
+  .hero p {
+    font-size: 17px; color: var(--muted); margin-top: 12px;
+    max-width: 460px; margin-left: auto; margin-right: auto; line-height: 1.6;
+  }
+  .input-card {
+    width: 100%; background: var(--surface); border: 1px solid var(--border);
+    border-radius: 20px; padding: 32px; position: relative; overflow: hidden;
+  }
+  .input-card::before {
+    content: ''; position: absolute; inset: 0; border-radius: 20px;
+    background: radial-gradient(ellipse 80% 50% at 50% 100%, oklch(90% 0.04 45 / 18%), transparent);
+    pointer-events: none;
+  }
+  .input-card textarea {
+    width: 100%; min-height: 140px; padding: 16px; border: 1px solid var(--border);
+    border-radius: 14px; font-size: 16px; font-family: var(--font-body);
+    color: var(--fg); background: var(--bg); resize: vertical; outline: none;
+    transition: border-color 0.2s, box-shadow 0.2s; line-height: 1.6; position: relative;
+  }
+  .input-card textarea:focus { border-color: var(--accent); box-shadow: 0 0 0 3px oklch(64% 0.13 28 / 10%); }
+  .input-card textarea::placeholder { color: oklch(65% 0.01 70); }
+  .input-card .actions {
+    display: flex; justify-content: space-between; align-items: center;
+    margin-top: 20px; position: relative;
+  }
+  .input-card .hint { font-size: 12px; color: var(--muted); }
+  .btn-primary {
+    padding: 12px 32px; border: none; border-radius: 14px; font-size: 15px;
+    font-weight: 600; font-family: var(--font-body); cursor: pointer;
+    background: var(--accent); color: #fff;
+    transition: background 0.2s, transform 0.15s, box-shadow 0.15s;
+  }
+  .btn-primary:hover {
+    background: oklch(58% 0.13 28); transform: translateY(-1px);
+    box-shadow: 0 4px 16px oklch(64% 0.13 28 / 25%);
+  }
+  .btn-primary:active { transform: translateY(0); }
+  .btn-primary:disabled { opacity: 0.4; cursor: not-allowed; transform: none; box-shadow: none; }
+
+  .examples { margin-top: 40px; width: 100%; }
+  .examples-label {
+    font-size: 13px; color: var(--muted); text-align: center;
+    margin-bottom: 14px; letter-spacing: 0.02em;
+  }
+  .examples-row { display: flex; flex-wrap: wrap; gap: 10px; justify-content: center; }
+  .example-chip {
+    padding: 10px 18px; border: 1px solid var(--border); border-radius: 100px;
+    font-size: 14px; color: var(--muted); cursor: pointer;
+    background: var(--surface); transition: border-color 0.2s, color 0.2s, background 0.2s;
+    font-family: var(--font-body);
+  }
+  .example-chip:hover { border-color: var(--accent); color: var(--accent); background: oklch(95% 0.03 45); }
+
+  .toast {
+    position: fixed; top: 80px; left: 50%; transform: translateX(-50%);
+    padding: 12px 24px; border-radius: 12px; font-size: 14px; font-weight: 500;
+    z-index: 200; opacity: 0; transition: opacity 0.3s;
+  }
+  .toast.show { opacity: 1; }
+  .toast.error { background: oklch(94% 0.03 20); color: oklch(42% 0.15 20); }
+</style>
 </head>
-<body class="min-h-screen flex items-center justify-center p-4">
-    <div class="w-full max-w-4xl">
-        <!-- 顶部导航 -->
-        <div class="flex justify-between items-center mb-8">
-            <h1 class="text-5xl font-bold text-gray-800">
-                Talk2Code 智能生成
-            </h1>
-            <div class="flex items-center gap-4">
-                <!-- 用户信息显示 -->
-                <div class="flex items-center gap-2 px-4 py-2 bg-white rounded-xl shadow-md">
-                    <svg class="w-5 h-5 text-purple-600" fill="currentColor" viewBox="0 0 20 20">
-                        <path fill-rule="evenodd" d="M10 9a3 3 0 100-6 3 3 0 000 6zm-7 9a7 7 0 1114 0H3z" clip-rule="evenodd"/>
-                    </svg>
-                    <span id="currentUser" class="text-gray-700 font-medium"></span>
-                </div>
-                <!-- 退出登录按钮 -->
-                <button
-                    onclick="logout()"
-                    class="px-4 py-2 text-gray-500 hover:text-red-600 transition-colors"
-                    title="退出登录"
-                >
-                    <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1"/>
-                    </svg>
-                </button>
-                <!-- 我的应用按钮 -->
-                <button
-                    onclick="showMyApps()"
-                    class="px-6 py-3 btn-gradient text-white rounded-xl font-semibold shadow-md hover:shadow-lg transition-all flex items-center gap-2"
-                >
-                    <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10"/>
-                    </svg>
-                    我的应用
-                </button>
-            </div>
-        </div>
-        <p class="text-center text-gray-500 mb-12 text-lg">
-            输入你的产品需求，AI 将实时生成可运行的代码
-        </p>
+<body>
 
-        <!-- 错误提示 -->
-        <div id="errorMsg" class="hidden bg-red-50 text-red-600 px-4 py-3 rounded-lg mb-6 text-center"></div>
+<nav class="nav">
+  <a href="index.html" class="nav-brand">Talk<span>2</span>Code</a>
+  <div class="nav-links">
+    <a href="history.html" class="nav-link">历史对话</a>
+    <a href="settings.html" class="nav-link">设置</a>
+  </div>
+  <div class="nav-user">
+    <span class="nav-username" id="navUsername">用户</span>
+    <span class="nav-avatar" id="navAvatar">U</span>
+    <button class="btn-logout" onclick="logout()">退出</button>
+  </div>
+</nav>
 
-        <!-- 需求输入框 -->
-        <div class="bg-white rounded-2xl shadow-xl p-8">
-            <textarea
-                id="requirementInput"
-                class="w-full h-40 px-6 py-4 border-2 border-gray-200 rounded-xl focus:outline-none focus:border-purple-400 input-focus resize-none text-lg text-gray-700"
-                placeholder="输入你的产品需求，如：开发一个待办清单 App，支持增删改查"
-            ></textarea>
+<main class="main">
+  <div class="hero">
+    <h1>用自然语言<mark>创造</mark>应用</h1>
+    <p>描述你想要的应用，AI 将实时生成完整的前端代码，支持预览和持续迭代优化。</p>
+  </div>
 
-            <!-- 提交按钮 -->
-            <div class="text-center mt-6">
-                <button
-                    id="submitBtn"
-                    class="btn-gradient px-12 py-4 text-white rounded-xl font-semibold text-lg transition-all transform hover:scale-[1.02] disabled:opacity-50 disabled:cursor-not-allowed disabled:transform-none"
-                    disabled
-                >
-                    <span id="btnText">生成代码</span>
-                    <span id="btnLoading" class="hidden">
-                        <svg class="animate-spin inline-block h-5 w-5 mr-2" viewBox="0 0 24 24">
-                            <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4" fill="none"/>
-                            <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"/>
-                        </svg>
-                        正在提交...
-                    </span>
-                </button>
-            </div>
-        </div>
-
-        <!-- 使用提示 -->
-        <div class="mt-12 text-center">
-            <p class="text-gray-500 text-sm mb-4">💡 试试这样描述你的需求：</p>
-            <div class="flex flex-wrap justify-center gap-3">
-                <span class="px-4 py-2 bg-white rounded-full text-sm text-gray-600 shadow-sm">开发一个待办清单 App，支持增删改查</span>
-                <span class="px-4 py-2 bg-white rounded-full text-sm text-gray-600 shadow-sm">做一个计算器应用</span>
-                <span class="px-4 py-2 bg-white rounded-full text-sm text-gray-600 shadow-sm">创建一个笔记应用，支持保存和分类</span>
-            </div>
-        </div>
-
-        <!-- 我的应用弹窗 -->
-        <div id="myAppsModal" class="hidden fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
-            <div class="bg-white rounded-2xl shadow-2xl w-full max-w-3xl max-h-[80vh] overflow-hidden">
-                <!-- 弹窗头部 -->
-                <div class="flex justify-between items-center px-6 py-4 border-b border-gray-200">
-                    <h2 class="text-2xl font-bold text-gray-800">我的应用</h2>
-                    <button onclick="closeMyApps()" class="text-gray-400 hover:text-gray-600 transition-colors">
-                        <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
-                        </svg>
-                    </button>
-                </div>
-                <!-- 弹窗内容 -->
-                <div id="appsList" class="p-6 overflow-y-auto max-h-[60vh]">
-                    <div class="text-center text-gray-500 py-8">加载中...</div>
-                </div>
-            </div>
-        </div>
+  <div class="input-card">
+    <textarea id="requirementInput" placeholder="描述你的需求，例如：开发一个待办清单应用，支持添加、删除、标记完成，界面简洁美观…"></textarea>
+    <div class="actions">
+      <span class="hint">Ctrl + Enter 快速提交</span>
+      <button class="btn-primary" id="submitBtn" disabled>生成代码</button>
     </div>
+  </div>
 
-    <script>
-        // API 基础地址 - 后端运行在 5001 端口
-        // API 基础地址 - 使用相对路径，与当前页面同源
-        const API_BASE = window.location.origin;
+  <div class="examples">
+    <p class="examples-label">试试这样描述</p>
+    <div class="examples-row">
+      <span class="example-chip">开发一个待办清单应用，支持增删改查</span>
+      <span class="example-chip">做一个计算器应用，界面精美</span>
+      <span class="example-chip">创建一个笔记应用，支持分类和搜索</span>
+    </div>
+  </div>
+</main>
 
-        // 页面加载完成后初始化
-        document.addEventListener('DOMContentLoaded', function() {
-            // DOM 元素
-            const requirementInput = document.getElementById('requirementInput');
-            const submitBtn = document.getElementById('submitBtn');
-            const btnText = document.getElementById('btnText');
-            const btnLoading = document.getElementById('btnLoading');
-            const errorMsg = document.getElementById('errorMsg');
+<div class="toast" id="toast"></div>
 
-            // 检查登录状态
-            function checkAuth() {
-                const token = localStorage.getItem('token');
-                if (!token) {
-                    window.location.href = '/login.html';
-                    return false;
-                }
-                return true;
-            }
+<script>
+const API_BASE = window.location.origin;
+const token = localStorage.getItem('token');
+if (!token) { window.location.href = 'login.html'; }
 
-            // 页面加载时检查登录状态
-            if (!checkAuth()) return;
+try {
+  const payload = JSON.parse(atob(token.split('.')[1]));
+  document.getElementById('navUsername').textContent = payload.sub || '用户';
+  document.getElementById('navAvatar').textContent = (payload.sub || 'U')[0].toUpperCase();
+} catch(e) {}
 
-            // 获取并显示当前用户信息
-            loadCurrentUser();
+function logout() {
+  localStorage.removeItem('token');
+  window.location.href = 'login.html';
+}
 
-            console.log('页面已加载，按钮初始状态:', submitBtn.disabled);
-            console.log('输入框元素:', requirementInput);
+function showToast(msg, type) {
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.className = 'toast ' + type + ' show';
+  setTimeout(() => t.classList.remove('show'), 3000);
+}
 
-            // 隐藏错误消息
-            function hideError() {
-                errorMsg.classList.add('hidden');
-            }
+const textarea = document.getElementById('requirementInput');
+const btn = document.getElementById('submitBtn');
+textarea.addEventListener('input', () => {
+  btn.disabled = textarea.value.trim().length === 0;
+});
 
-            // 显示错误消息
-            function showError(message) {
-                errorMsg.textContent = message;
-                errorMsg.classList.remove('hidden');
-                setTimeout(hideError, 5000);
-            }
+document.querySelectorAll('.example-chip').forEach(chip => {
+  chip.addEventListener('click', () => {
+    textarea.value = chip.textContent;
+    btn.disabled = false;
+    textarea.focus();
+  });
+});
 
-            // 设置按钮加载状态
-            function setLoading(loading) {
-                if (loading) {
-                    btnText.classList.add('hidden');
-                    btnLoading.classList.remove('hidden');
-                    submitBtn.disabled = true;
-                } else {
-                    btnText.classList.remove('hidden');
-                    btnLoading.classList.add('hidden');
-                    submitBtn.disabled = false;
-                }
-            }
+document.addEventListener('keydown', (e) => {
+  if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
+    e.preventDefault();
+    if (!btn.disabled) btn.click();
+  }
+});
 
-            // 提交需求
-            async function submitRequirement() {
-                const content = requirementInput.value.trim();
-                if (!content) return;
+btn.addEventListener('click', async () => {
+  const content = textarea.value.trim();
+  if (!content) return;
 
-                setLoading(true);
-                hideError();
+  btn.disabled = true;
+  btn.textContent = '提交中…';
 
-                const token = localStorage.getItem('token');
-                console.log('提交需求 - Token:', token ? token.substring(0, 20) + '...' : '无 token');
-
-                try {
-                    const response = await fetch(`${API_BASE}/api/requirements`, {
-                        method: 'POST',
-                        headers: {
-                            'Content-Type': 'application/json',
-                            'Authorization': `Bearer ${token}`
-                        },
-                        body: JSON.stringify({ content })
-                    });
-
-                    console.log('响应状态:', response.status);
-                    const data = await response.json();
-                    console.log('响应数据:', data);
-
-                    if (response.ok) {
-                        // 存储需求信息，跳转到详情页
-                        sessionStorage.setItem('currentRequirementId', data.requirement.id);
-                        window.location.href = `/detail.html?id=${data.requirement.id}`;
-                    } else {
-                        showError(data.error || '提交失败，请重试');
-                        setLoading(false);
-                    }
-                } catch (error) {
-                    showError('网络错误，请稍后重试');
-                    console.error('提交错误:', error);
-                    setLoading(false);
-                }
-            }
-
-            // 输入框状态监听 - 关键修复：确保每次输入都更新按钮状态
-            requirementInput.addEventListener('input', function() {
-                const hasContent = requirementInput.value.trim().length > 0;
-                submitBtn.disabled = !hasContent;
-                console.log('输入内容:', requirementInput.value.trim().length, '按钮状态:', submitBtn.disabled);
-            });
-
-            // 提交按钮点击
-            submitBtn.addEventListener('click', submitRequirement);
-
-            // 回车提交（Ctrl+Enter）
-            requirementInput.addEventListener('keydown', (e) => {
-                if (e.key === 'Enter' && e.ctrlKey) {
-                    submitRequirement();
-                }
-            });
-
-            // 显示我的应用
-            window.showMyApps = async function() {
-                const modal = document.getElementById('myAppsModal');
-                const appsList = document.getElementById('appsList');
-                modal.classList.remove('hidden');
-
-                // 清空容器（安全方式）
-                while (appsList.firstChild) {
-                    appsList.removeChild(appsList.firstChild);
-                }
-
-                const loadingDiv = createSafeElement('div', { class: 'text-center text-gray-500 py-8' }, '加载中...');
-                appsList.appendChild(loadingDiv);
-
-                const token = localStorage.getItem('token');
-                try {
-                    const response = await fetch(`${API_BASE}/api/requirements`, {
-                        headers: {
-                            'Authorization': `Bearer ${token}`
-                        }
-                    });
-
-                    const data = await response.json();
-                    const requirements = data.requirements || [];
-
-                    // 清空容器
-                    while (appsList.firstChild) {
-                        appsList.removeChild(appsList.firstChild);
-                    }
-
-                    if (requirements.length === 0) {
-                        const emptyDiv = createSafeElement('div', { class: 'text-center text-gray-500 py-12' });
-                        const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
-                        svg.setAttribute('class', 'w-16 h-16 mx-auto mb-4 text-gray-300');
-                        svg.setAttribute('fill', 'none');
-                        svg.setAttribute('stroke', 'currentColor');
-                        svg.setAttribute('viewBox', '0 0 24 24');
-                        const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
-                        path.setAttribute('stroke-linecap', 'round');
-                        path.setAttribute('stroke-linejoin', 'round');
-                        path.setAttribute('stroke-width', '2');
-                        path.setAttribute('d', 'M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10');
-                        svg.appendChild(path);
-                        emptyDiv.appendChild(svg);
-                        const p = createSafeElement('p', {}, '暂无应用，创建一个吧！');
-                        emptyDiv.appendChild(p);
-                        appsList.appendChild(emptyDiv);
-                        return;
-                    }
-
-                    // 使用 DOM 操作创建列表项，避免 XSS
-                    requirements.forEach(req => {
-                        const statusColor = {
-                            'pending': 'yellow',
-                            'processing': 'blue',
-                            'finished': 'green',
-                            'failed': 'red'
-                        }[req.status] || 'gray';
-
-                        const statusText = {
-                            'pending': '处理中',
-                            'processing': '生成中',
-                            'finished': '已完成',
-                            'failed': '失败'
-                        }[req.status] || req.status;
-
-                        // 安全验证 req.id
-                        const reqId = parseInt(req.id, 10);
-                        if (!reqId || reqId <= 0) return;
-
-                        const cardDiv = createSafeElement('div', {
-                            class: 'border border-gray-200 rounded-xl p-4 mb-3 hover:shadow-md transition-shadow cursor-pointer',
-                            onclick: (e) => {
-                                e.preventDefault();
-                                goToRequirement(reqId);
-                            }
-                        });
-
-                        const flexDiv = createSafeElement('div', { class: 'flex justify-between items-center' });
-                        const leftDiv = createSafeElement('div', { class: 'flex-1' });
-                        const titleH3 = createSafeElement('h3', { class: 'font-semibold text-gray-800 text-lg' }, req.title);
-                        const timeP = createSafeElement('p', { class: 'text-sm text-gray-500 mt-1' }, '创建于 ' + formatTime(req.create_time));
-                        leftDiv.appendChild(titleH3);
-                        leftDiv.appendChild(timeP);
-
-                        const statusSpan = createSafeElement('span', {
-                            class: 'px-3 py-1 bg-' + statusColor + '-100 text-' + statusColor + '-700 rounded-full text-sm font-medium'
-                        }, statusText);
-
-                        flexDiv.appendChild(leftDiv);
-                        flexDiv.appendChild(statusSpan);
-                        cardDiv.appendChild(flexDiv);
-                        appsList.appendChild(cardDiv);
-                    });
-
-                } catch (error) {
-                    // 清空容器
-                    while (appsList.firstChild) {
-                        appsList.removeChild(appsList.firstChild);
-                    }
-                    const errorDiv = createSafeElement('div', { class: 'text-center text-red-500 py-8' }, '加载失败，请重试');
-                    appsList.appendChild(errorDiv);
-                    console.error('加载应用列表失败:', error);
-                }
-            };
-
-            // 关闭我的应用
-            window.closeMyApps = function() {
-                document.getElementById('myAppsModal').classList.add('hidden');
-            };
-
-            // 跳转到需求详情
-            window.goToRequirement = function(id) {
-                window.location.href = `/detail.html?id=${id}`;
-            };
-
-            // 格式化时间
-            window.formatTime = function(timeStr) {
-                if (!timeStr) return '未知';
-                const date = new Date(timeStr);
-                return date.toLocaleString('zh-CN');
-            };
-
-            // 转义 HTML
-            window.escapeHtml = function(text) {
-                const div = document.createElement('div');
-                div.textContent = text;
-                return div.innerHTML;
-            };
-
-            // 点击弹窗外部关闭
-            document.getElementById('myAppsModal').addEventListener('click', (e) => {
-                if (e.target === e.currentTarget) {
-                    window.closeMyApps();
-                }
-            });
-        });
-
-        // 获取当前用户信息
-        async function loadCurrentUser() {
-            const token = localStorage.getItem('token');
-            if (!token) return;
-
-            try {
-                const response = await fetch(`${API_BASE}/api/user/info`, {
-                    headers: {
-                        'Authorization': `Bearer ${token}`
-                    }
-                });
-
-                if (response.ok) {
-                    const data = await response.json();
-                    document.getElementById('currentUser').textContent = data.user.username || '用户';
-                }
-            } catch (error) {
-                console.error('获取用户信息失败:', error);
-            }
-        }
-
-        // 退出登录
-        function logout() {
-            if (confirm('确定要退出登录吗？')) {
-                localStorage.removeItem('token');
-                localStorage.removeItem('user');
-                window.location.href = '/login.html';
-            }
-        }
-    </script>
+  try {
+    const resp = await fetch(API_BASE + '/api/requirements', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': 'Bearer ' + token
+      },
+      body: JSON.stringify({ content })
+    });
+    const data = await resp.json();
+    if (!resp.ok) {
+      showToast(data.error || '创建失败', 'error');
+      btn.disabled = false;
+      btn.textContent = '生成代码';
+      return;
+    }
+    const reqId = data.requirement ? data.requirement.id : data.requirement_id;window.location.href = 'detail.html?id=' + reqId;
+  } catch (err) {
+    showToast('网络错误，请稍后重试', 'error');
+    btn.disabled = false;
+    btn.textContent = '生成代码';
+  }
+});
+</script>
 </body>
 </html>

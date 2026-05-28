@@ -293,19 +293,8 @@ function safeEventHandler(handler) {
     };
 }
 
-// ==================== DOMPurify 初始化 ====================
-
-// 如果 DOMPurify 未加载，尝试从 CDN 加载
-if (typeof DOMPurify === 'undefined') {
-    // 动态加载 DOMPurify
-    const script = document.createElement('script');
-    script.src = 'https://cdnjs.cloudflare.com/ajax/libs/dompurify/3.0.6/purify.min.js';
-    script.integrity = 'sha384-...',
-    script.crossOrigin = 'anonymous';
-    document.head.appendChild(script);
-}
-
 // ==================== 导出 ====================
+// XSS 防护统一使用 SecurityUtils.escapeHtml()，基于 DOM API 实现，无需额外依赖
 
 // 导出到全局（用于 inline script）
 window.SecurityUtils = {

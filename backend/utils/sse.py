@@ -88,6 +88,11 @@ class SSEMessage:
         })
 
     @staticmethod
+    def question_form_message(form_data: dict) -> str:
+        """问题表单消息（交互式澄清）"""
+        return SSEMessage.format_event('question-form', form_data)
+
+    @staticmethod
     def complete_message(requirement_id: int) -> str:
         """
         完成消息

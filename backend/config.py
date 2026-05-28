@@ -97,6 +97,7 @@ class Settings(BaseSettings):
     LLM_MAX_TOKENS: int = Field(default=4000, ge=100, le=32000, description='LLM 最大生成 token 数')
     LLM_TIMEOUT: int = Field(default=60, ge=10, le=300, description='LLM 调用超时时间（秒）')
     LLM_MAX_RETRIES: int = Field(default=2, ge=0, le=5, description='LLM 调用最大重试次数')
+    LLM_CRAFT_ENABLED: bool = Field(default=True, description='是否启用 Craft 设计质量规则注入')
 
     @field_validator('LLM_API_KEY')
     @classmethod

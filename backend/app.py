@@ -583,6 +583,53 @@ def chat_with_requirement(req_id):
         db.close()
 
 
+@app.route('/api/requirements/<int:req_id>/clarify', methods=['POST'])
+@jwt_required()
+def clarify_requirement(req_id):
+    """处理需求澄清答案，补充到需求内容后重新执行工作流"""
+    from models import Requirement, SessionLocal
+
+    user_id = int(get_jwt_identity())
+    data = request.get_json(silent=True) or {}
+    answers = data.get('answers', {})
+
+    if not answers:
+        return jsonify({'error': '请提供澄清答案'}), 400
+
+    db = SessionLocal()
+    try:
+        req_record = db.query(Requirement).filter(
+            Requirement.id == req_id, Requirement.user_id == user_id
+        ).first()
+        if not req_record:
+            return jsonify({'error': '需求不存在'}), 404
+
+        # 拼接答案到原需求
+        answer_text = '；'.join(f'{q}: {a}' for q, a in answers.items())
+        original_content = req_record.content
+        req_record.content = f'{original_content}\n\n[用户补充说明]\n{answer_text}'
+        req_record.status = 'pending'
+        req_record.dialogue_history = req_record.dialogue_history or []
+        req_record.dialogue_history.append({
+            'role': 'user',
+            'name': '用户',
+            'content': answer_text,
+            'timestamp': get_current_timestamp()
+        })
+        db.commit()
+
+        # 重新提交到任务队列
+        task_queue.submit(req_id, process_requirement_async, req_id)
+        logger.info(f"需求 {req_id} 收到澄清答案，重新处理")
+
+        return jsonify({'message': '澄清答案已提交', 'requirement_id': req_id})
+    except Exception as e:
+        db.rollback()
+        return jsonify({'error': f'处理失败：{str(e)}'}), 500
+    finally:
+        db.close()
+
+
 @app.route('/api/requirements/<int:req_id>/code', methods=['POST'])
 @jwt_required()
 def save_code(req_id):

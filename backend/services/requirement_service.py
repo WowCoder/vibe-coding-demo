@@ -44,40 +44,45 @@ class RequirementService:
         """
         final_state = None
 
-        # 使用 stream 方法流式执行
-        for event in self.workflow.stream(initial_state, stream_mode='updates'):
-            # event 是一个字典，key 是节点名，value 是节点返回的状态更新
-            for node_name, node_output in event.items():
-                logger.info(f"节点 {node_name} 执行完成")
+        # 跟踪上一次对话和代码的数量，只推送增量
+        last_dialogue_count = len(initial_state.get('dialogue_history', []) or [])
+        last_code_count = 0
 
-                # 发送进度更新
+        # 使用 stream 方法流式执行，mode='values' 返回完整累积状态
+        for event in self.workflow.stream(initial_state, stream_mode='values'):
+            final_state = event
+
+            # 检查是否需要澄清
+            if final_state.get('current_step') == 'needs_clarification':
+                question_form = final_state.get('metadata', {}).get('question_form', {})
+                if question_form:
+                    self._send_question_form(requirement_id, question_form)
+                break  # 暂停工作流
+
+            # 发送进度更新
+            current_step = final_state.get('current_step', '')
+            node_name = 'planner' if 'planner' in current_step else 'coder' if ('coder' in current_step or 'engineer' in current_step) else ''
+            if node_name:
                 progress = self._progress_map.get(node_name, 0)
-                agent_name_map = {
-                    'planner': 'Planner',
-                    'coder': 'Coder'
-                }
-                agent_name = agent_name_map.get(node_name, node_name)
+                agent_name = {'planner': 'Planner', 'coder': 'Coder'}.get(node_name, node_name)
                 self._send_progress(requirement_id, agent_name, progress)
 
-                # 发送对话更新
-                if 'dialogue_history' in node_output and node_output['dialogue_history']:
-                    for dialogue in node_output['dialogue_history']:
-                        self._send_dialogue(requirement_id, dialogue.get('name', agent_name), dialogue.get('content', ''))
+            # 发送增量对话更新
+            dialogues = final_state.get('dialogue_history', []) or []
+            for dialogue in dialogues[last_dialogue_count:]:
+                self._send_dialogue(requirement_id, dialogue.get('name', 'AI'), dialogue.get('content', ''))
+            last_dialogue_count = len(dialogues)
 
-                # 发送代码更新
-                if node_name == 'coder' and 'code_files' in node_output:
-                    code_files = node_output.get('code_files', [])
-                    for file_data in code_files:
-                        filename = file_data.get('filename', 'unknown.txt')
-                        content = file_data.get('content', '')
-                        self._send_code(requirement_id, filename, content)
+            # 发送增量代码更新
+            code_files = final_state.get('code_files', []) or []
+            for file_data in code_files[last_code_count:]:
+                self._send_code(requirement_id, file_data.get('filename', 'unknown.txt'), file_data.get('content', ''))
+            last_code_count = len(code_files)
 
-                # 检查错误
-                if node_output.get('error'):
-                    logger.error(f"节点 {node_name} 执行错误：{node_output['error']}")
-
-            # 保留最终状态
-            final_state = node_output
+            # 检查错误
+            if final_state.get('error'):
+                logger.error(f"工作流执行错误：{final_state['error']}")
+                break
 
         return final_state
 
@@ -131,6 +136,18 @@ class RequirementService:
 
             if final_state is None:
                 return False
+
+            # 如果需要澄清，保存当前状态但不标记为完成
+            if final_state.get('current_step') == 'needs_clarification':
+                dialogue = final_state.get('dialogue_history', [])
+                if dialogue:
+                    requirement.dialogue_history = dialogue
+                    from sqlalchemy.orm.attributes import flag_modified
+                    flag_modified(requirement, 'dialogue_history')
+                requirement.status = 'pending'
+                db.commit()
+                logger.info(f"需求 {requirement_id} 等待用户澄清")
+                return True
 
             # 处理最终状态
             return self._process_final_state(db, requirement, requirement_id, final_state)
@@ -190,6 +207,11 @@ class RequirementService:
             requirement.status = 'failed'
             db.commit()
             return False
+
+    def _send_question_form(self, requirement_id: int, form_data: dict):
+        """发送问题表单消息"""
+        message = SSEMessage.question_form_message(form_data)
+        sse_manager.broadcast(str(requirement_id), message)
 
     def _send_progress(self, requirement_id: int, agent_name: str, progress: int):
         """发送进度更新消息"""

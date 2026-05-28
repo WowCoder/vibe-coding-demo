@@ -40,11 +40,18 @@ ENGINEER_PROMPT = ChatPromptTemplate.from_messages([
         "3. 可以使用 Tailwind CSS CDN 进行样式设计\n"
         "4. 数据使用 LocalStorage 持久化\n\n"
         "输出格式：\n"
-        "以 JSON 数组格式返回：\n"
-        "[{{\"filename\": \"index.html\", \"content\": \"...\"}}, {{\"filename\": \"style.css\", \"content\": \"...\"}}, {{\"filename\": \"script.js\", \"content\": \"...\"}}]\n\n"
+        "以 JSON 格式返回，推荐包含 artifact 元数据：\n"
+        "{{\"artifact\": {{\"type\": \"text/html\", \"title\": \"应用名称\", \"identifier\": \"app-id\"}}, \"files\": [{{\"filename\": \"index.html\", \"content\": \"...\"}}, ...]}}\n"
+        "兼容旧格式：[{{\"filename\": \"index.html\", \"content\": \"...\"}}, ...]\n\n"
         "不要输出其他解释文字，只返回 JSON。"
+        "{craft_rules}"  # 动态注入的设计质量规则
     ),
-    HumanMessagePromptTemplate.from_template("请为以下需求生成完整的 Web 应用代码：\n\n用户需求：{requirement}\n\n{context}\n\n请严格按照产品功能规划和技术架构设计来实现代码。")
+    HumanMessagePromptTemplate.from_template(
+        "请为以下需求生成完整的 Web 应用代码：\n\n"
+        "用户需求：{requirement}\n\n"
+        "{context}\n\n"
+        "请严格按照产品功能规划和技术架构设计来实现代码。"
+    )
 ])
 
 # 工程师的上下文模板
