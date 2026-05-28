@@ -4,7 +4,7 @@
 
 ## 技术栈
 
-- **前端**: HTML5 + CSS3 + JavaScript + Tailwind CSS + CodeMirror
+- **前端**: HTML5 + CSS3 + JavaScript + Warm Soft 设计系统 (OKLch)
 - **后端**: Python 3.11+ + Flask
 - **数据库**: SQLite
 - **实时通信**: SSE (Server-Sent Events)
@@ -33,6 +33,10 @@ talk2code/
 │   │   ├── requirement_service.py  # 需求处理服务
 │   │   ├── sse_manager.py          # SSE 管理器
 │   │   └── task_queue.py           # 任务队列
+│   ├── craft/              # 设计质量规则（anti-slop/accessibility/typography/color）
+│   ├── craft_loader.py     # Craft 规则加载器
+│   ├── skills/             # 可插拔应用模板（todo/calculator/note/calendar/generic）
+│   ├── skill_loader.py     # Skill 匹配引擎
 │   ├── utils/
 │   │   ├── logger.py       # 日志工具
 │   │   ├── security.py     # 密码加密
@@ -40,10 +44,15 @@ talk2code/
 │   │   ├── retry.py        # 指数退避重试
 │   │   └── rate_limiter.py # 限流器
 │   └── tests/              # 测试
-└── frontend/
-    ├── login.html          # 登录/注册页
-    ├── index.html          # 首页
-    └── detail.html         # 需求详情页（AI 对话 + 代码编辑器）
+├── frontend/
+│   ├── login.html          # 登录/注册页
+│   ├── index.html          # 首页 — 需求输入
+│   ├── detail.html         # 需求详情页（AI 对话 + 代码编辑器 + 预览）
+│   ├── history.html        # 历史对话 — 项目列表
+│   ├── settings.html       # 设置 — 个人资料/外观/账户/关于
+│   └── js/
+│       └── security.js     # XSS 防护工具
+└── openspec/               # OpenSpec 规范驱动开发
 ```
 
 ## 快速开始
@@ -78,12 +87,6 @@ LLM_PROVIDER=openai_compatible
 LLM_BASE_URL=https://api.deepseek.com
 LLM_MODEL=deepseek-v4-flash
 LLM_API_KEY=your-api-key-here
-
-# Anthropic 兼容示例
-# LLM_PROVIDER=anthropic_compatible
-# LLM_BASE_URL=https://api.anthropic.com
-# LLM_MODEL=claude-sonnet-4-6
-# LLM_API_KEY=your-api-key-here
 ```
 
 ### 3. 启动服务
@@ -102,15 +105,16 @@ cd backend && python app.py
 ## 使用流程
 
 1. **登录** - 使用测试账号或注册新账号
-2. **输入需求** - 在首页输入框描述你的需求，或点击"我的应用"查看历史
+2. **输入需求** - 在首页输入框描述你的需求
    - 示例：`开发一个待办清单 App，支持增删改查`
    - 示例：`做一个计算器应用`
    - 示例：`创建一个笔记应用`
-3. **查看生成** - 进入详情页：
+3. **需求澄清**（自动触发）- 需求不明确时 AI 生成问题表单补充信息
+4. **查看生成** - 进入详情页：
    - **左侧**: 观看 AI 智能体（Planner → Coder）协同讨论
-   - **右侧**: 实时查看代码生成（支持代码/预览 TAB 切换）
-4. **持续对话** - 生成完成后，可在左侧 AI 对话面板底部继续与 AI 对话
-5. **预览与下载** - 切换到"预览"TAB 实时查看效果，或复制/下载代码文件
+   - **右侧**: 实时查看代码生成（支持代码/预览 TAB 切换、桌面/平板/手机设备预览）
+5. **持续对话** - 生成完成后，可在左侧 AI 对话面板底部继续与 AI 对话
+6. **历史管理** - 在「历史对话」页面查看所有项目，支持搜索和状态筛选
 
 ## 核心功能
 
@@ -131,24 +135,35 @@ cd backend && python app.py
 └──────────────┘     └──────────────┘
 ```
 
-- **Planner**: 分析需求，产出结构化的开发计划（功能清单、技术栈、数据模型、文件结构）
-- **Coder**: 根据 Plan 生成完整的代码文件（HTML/CSS/JS），支持失败自动重试和 Fallback 模板
+- **Planner**: 分析需求，产出结构化的开发计划（功能清单、技术栈、数据模型、文件结构）；模糊需求时自动生成澄清问题
+- **Coder**: 根据 Plan 生成完整的代码文件（HTML/CSS/JS），注入 Craft 设计质量规则，支持失败自动重试和 Fallback 模板
 
-### 错误处理
-- LLM 调用失败自动重试（指数退避）
-- JSON 解析失败时使用模板代码兜底
-- Planner 失败后 Coder 仍可使用降级方案继续
+### 设计质量规则（Craft 层）
 
-### 持续对话
-- 会话历史持久化到数据库
-- 支持多轮对话，AI 记住上下文
-- 刷新页面不丢失对话记录
+系统在代码生成时自动注入设计质量约束：
+
+- **anti-ai-slop**: 避免 AI 刻板模式（默认 indigo 色系、emoji 图标、圆角卡片+彩色左边框等）
+- **accessibility-baseline**: 颜色对比度、键盘导航、语义化 HTML、ARIA 标签
+- **typography**: 字号层级、行高、字距、行宽、字体配对
+- **color**: 色板结构、主色纪律、语义色、暗色主题
+
+### 可插拔应用模板（Skill 系统）
+
+通过 `skills/` 目录下的 Markdown 文件定义应用类型，支持关键词自动匹配：
+
+- 待办清单、计算器、笔记、日历、通用应用
+- 新增应用类型只需添加 `skills/<name>/SKILL.md`，无需修改代码
+
+### 交互式需求澄清
+
+- 需求过短或缺少功能关键词时，AI 自动生成结构化问题表单
+- 用户补充后重新进入生成流程，最多 1 轮澄清
 
 ### 代码编辑器
-- CodeMirror 语法高亮
+- 自建代码编辑器（文件树侧边栏 + 内容预览 + contenteditable 编辑）
 - 多文件切换（HTML/CSS/JS）
-- 实时预览（iframe 沙箱隔离）
-- 复制/下载功能
+- 实时预览（iframe 沙箱隔离 + CSP + device preview）
+- 代码下载功能
 
 ### 数据持久化
 - SQLite 存储用户数据
@@ -165,6 +180,8 @@ cd backend && python app.py
 | /api/requirements | GET | 获取需求列表 |
 | /api/requirements/<id> | GET | 获取需求详情 |
 | /api/requirements/<id>/chat | POST | 发送对话消息（持续对话） |
+| /api/requirements/<id>/clarify | POST | 提交澄清答案（交互式澄清） |
+| /api/requirements/<id>/code | POST | 保存代码修改 |
 | /api/sse/<id> | GET | SSE 实时推送连接 |
 | /api/health | GET | 健康检查（含 LLM 配置状态） |
 
@@ -174,7 +191,7 @@ cd backend && python app.py
 - **计算器 App** (输入包含"计算器"或"计算")
 - **笔记 App** (输入包含"笔记"或"备忘录")
 - **日历 App** (输入包含"日历"、"日程"或"calendar")
-- **通用应用** (其他需求)
+- **通用应用** (其他需求 — AI 自主设计)
 
 ## 界面预览
 
@@ -193,9 +210,11 @@ cd backend && python app.py
 ---
 
 **页面说明**:
-- **登录页**: 支持登录/注册切换，测试账号 `test / 123456`
-- **首页**: 输入产品需求，AI 实时生成可运行代码
-- **详情页**: 左侧 AI 智能体协同讨论，右侧代码/预览实时切换
+- **登录页**: 支持登录/注册切换，测试账号 `test / 123456`，Warm Soft 暖色设计
+- **首页**: Hero 区 + 需求输入卡片 + 示例快捷填充，毛玻璃导航栏
+- **详情页**: 左侧 AI 对话（气泡式）+ 右侧代码/预览切换，暗色代码面板
+- **历史对话**: 项目列表 + 搜索 + 状态徽章（已完成/生成中/排队中/失败）
+- **设置**: 侧边栏布局，个人资料/外观偏好/账户安全/关于
 
 ## 注意事项
 
